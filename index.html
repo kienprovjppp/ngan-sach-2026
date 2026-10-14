@@ -576,7 +576,15 @@ saveLocal();
 if (navigator.storage && navigator.storage.persist) { navigator.storage.persist().catch(() => {}); }
 
 /* ================= Đồng bộ (Firebase) ================= */
-const FIREBASE_CONFIG = null;
+const FIREBASE_CONFIG = {
+  apiKey: "AIzaSyC2u7U90oSA4QwzvHXMvk2tkMlL7YCLnmw",
+  authDomain: "giu-lua.firebaseapp.com",
+  projectId: "giu-lua",
+  storageBucket: "giu-lua.firebasestorage.app",
+  messagingSenderId: "551827768696",
+  appId: "1:551827768696:web:4675b35d84d65ccb47b48d",
+  measurementId: "G-3JBXD1K2PV"
+};
 const SDK = "https://www.gstatic.com/firebasejs/10.12.2/";
 const sync = { auth: null, db: null, user: null, ref: null, unsub: null, timer: null, lastRemote: null, state: "off", err: "", mode: "" };
 function mergeStates(a, b) {
