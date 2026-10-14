@@ -1,15 +1,21 @@
 {
+  "id": "./",
   "name": "Giữ Lửa Ví Tiền",
   "short_name": "Giữ Lửa",
+  "description": "Ngân sách theo kỳ, chuỗi lửa tiết kiệm, thực đơn tuần và danh sách đi chợ.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
-  "background_color": "#0E1220",
-  "theme_color": "#0E1220",
+  "background_color": "#F6F4F0",
+  "theme_color": "#F6F4F0",
   "lang": "vi",
   "icons": [
     { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml" },
     { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
     { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ],
+  "shortcuts": [
+    { "name": "Ghi khoản chi", "short_name": "Ghi chi", "url": "./?add=1", "icons": [{ "src": "icon-192.png", "sizes": "192x192", "type": "image/png" }] },
+    { "name": "Hôm nay không tiêu", "short_name": "Không tiêu", "url": "./?nospend=1", "icons": [{ "src": "icon-192.png", "sizes": "192x192", "type": "image/png" }] }
   ]
 }

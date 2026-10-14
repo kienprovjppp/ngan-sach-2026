@@ -1,0 +1,14 @@
+rules_version = '2';
+// Mỗi tài khoản chỉ đọc và ghi được đúng một tài liệu của chính mình: users/<mã tài khoản>.
+// Mọi thứ khác trong database đều bị chặn.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /users/{uid} {
+      allow read, delete: if request.auth != null && request.auth.uid == uid;
+      allow create, update: if request.auth != null && request.auth.uid == uid
+        && request.resource.data.keys().hasOnly(['json', 'at'])
+        && request.resource.data.json is string
+        && request.resource.data.json.size() < 900000;
+    }
+  }
+}
