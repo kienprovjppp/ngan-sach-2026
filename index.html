@@ -668,7 +668,7 @@ function authMsg(code) {
     "auth/invalid-credential": "Sai email hoặc mật khẩu.", "auth/wrong-password": "Sai email hoặc mật khẩu.", "auth/user-not-found": "Chưa có tài khoản với email này. Bấm Tạo tài khoản.",
     "auth/invalid-login-credentials": "Sai email hoặc mật khẩu.", "auth/email-already-in-use": "Email này đã có tài khoản. Bấm Đăng nhập.", "auth/invalid-email": "Email không hợp lệ.",
     "auth/weak-password": "Mật khẩu cần ít nhất 6 ký tự.", "auth/network-request-failed": "Không có mạng. Thử lại khi có mạng.",
-    "auth/too-many-requests": "Thử sai quá nhiều lần. Đợi vài phút rồi thử lại.", "auth/operation-not-allowed": "Firebase chưa bật đăng nhập Email/Password."
+    "auth/too-many-requests": "Thử sai quá nhiều lần. Đợi vài phút rồi thử lại.", "auth/operation-not-allowed": "Firebase chưa bật đăng nhập Email/Password.", "auth/configuration-not-found": "Firebase chưa bật Authentication. Vào Authentication, bấm Get started, rồi bật Email/Password."
   })[code] || "Không đăng nhập được (" + (code || "lỗi lạ") + ").";
 }
 async function doAuth(kind) {
