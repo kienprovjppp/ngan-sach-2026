@@ -63,6 +63,18 @@ a { color: var(--act); }
 .brand { display: flex; align-items: center; gap: 8px; font-family: var(--font-display); font-weight: 800; font-size: 19px; letter-spacing: -0.01em; }
 .brand svg { width: 22px; height: 22px; }
 .topbar .when { color: var(--muted); font-size: 13px; }
+.top-right { display: flex; align-items: center; gap: 10px; }
+.sync-chip { border: 1px solid var(--line); background: var(--surface); border-radius: 99px; padding: 4px 10px; font-size: 12.5px; font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
+.sync-chip::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+.sync-chip.ok::before { background: var(--good); }
+.sync-chip.busy::before { background: var(--warn); }
+.sync-chip.err::before, .sync-chip.out::before { background: var(--bad); }
+.sync-box { display: flex; flex-direction: column; gap: 10px; padding: 12px; border-radius: var(--r-sm); background: var(--sunk); }
+.sync-box h3 { font-size: 14.5px; }
+.sync-box form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.sync-box form .wide { grid-column: 1 / -1; }
+.sync-box input { background: var(--surface); }
+@media (max-width: 420px) { .sync-box form { grid-template-columns: 1fr; } }
 
 nav.tabs { position: fixed; left: 0; right: 0; bottom: 0; z-index: 20; background: var(--surface); border-top: 1px solid var(--line);
   display: grid; grid-template-columns: repeat(5, 1fr);
@@ -242,7 +254,7 @@ details.more summary { cursor: pointer; color: var(--muted); font-size: 13.5px; 
 <div class="shell">
   <div class="topbar">
     <div class="brand"><svg aria-hidden="true" style="color:var(--f2)"><use href="#i-flame"/></svg>Giữ Lửa Ví Tiền</div>
-    <div class="when" id="when"></div>
+    <div class="top-right"><button class="sync-chip" id="syncChip" type="button" hidden></button><div class="when" id="when"></div></div>
   </div>
 </div>
 
@@ -326,7 +338,7 @@ details.more summary { cursor: pointer; color: var(--muted); font-size: 13.5px; 
           <label class="f">Tổng quỹ ($)<input id="sTotal" type="number" min="0" step="1"></label>
           <label class="f">Giới hạn ngoài plan / ngày ($)<input id="sCap" type="number" min="0" step="1"></label>
         </div>
-        <p class="small muted" style="margin:0">Dữ liệu lưu ngay trong trình duyệt của máy này, không mất khi tắt hay mở lại trang. Trên iPhone, hãy thêm trang ra màn hình chính (Chia sẻ → Thêm vào MH chính) để Safari không tự xóa dữ liệu khi lâu không mở. Thỉnh thoảng bấm sao lưu để có file dự phòng hoặc chuyển sang máy khác.</p>
+        <div id="syncBox" class="sync-box"></div>
         <div class="actions">
           <button class="btn" type="button" id="bExport">Tải file sao lưu</button>
           <label class="btn" for="bImport" style="display:inline-flex;align-items:center">Khôi phục từ file</label>
@@ -528,23 +540,186 @@ const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 
 const KEY = "giu-lua-vi-tien:v1";
 function freshState() {
   return { v: 1, total: 1000, cap: 10, trackStart: today(), cats: JSON.parse(JSON.stringify(DEFAULT_CATS)),
-    expenses: [], checkins: {}, free: [], shop: {}, seenMilestone: 0 };
+    expenses: [], checkins: {}, free: [], shop: {}, seenMilestone: 0, settingsAt: 0, deleted: {}, resetAt: 0 };
+}
+function canon(o) {
+  if (Array.isArray(o)) return "[" + o.map(canon).join(",") + "]";
+  if (o && typeof o === "object") return "{" + Object.keys(o).filter((k) => o[k] !== undefined).sort().map((k) => JSON.stringify(k) + ":" + canon(o[k])).join(",") + "}";
+  return JSON.stringify(o === undefined ? null : o);
+}
+function normalize(o) {
+  const x = Object.assign(freshState(), o);
+  if (o.settingsAt === undefined) {
+    const custom = canon(x.cats) !== canon(DEFAULT_CATS) || x.total !== 1000 || x.cap !== 10;
+    x.settingsAt = custom ? 1 : 0;
+  }
+  x.deleted = x.deleted || {}; x.checkins = x.checkins || {}; x.shop = x.shop || {};
+  for (const k of Object.keys(x.checkins)) if (typeof x.checkins[k] !== "number") x.checkins[k] = 1;
+  return x;
 }
 let S;
 let storageOK = true;
 function load() {
-  try { const raw = localStorage.getItem(KEY); if (raw) { const o = JSON.parse(raw); if (o && o.v === 1) return Object.assign(freshState(), o); } }
+  try { const raw = localStorage.getItem(KEY); if (raw) { const o = JSON.parse(raw); if (o && o.v === 1) return normalize(o); } }
   catch (e) { storageOK = false; }
   return freshState();
 }
-function save() {
+function saveLocal() {
   try { localStorage.setItem(KEY, JSON.stringify(S)); storageOK = true; }
-  catch (e) { storageOK = false; toast("Không lưu được vào máy. Hãy tải file sao lưu để giữ dữ liệu."); }
+  catch (e) { storageOK = false; }
 }
+function save() { saveLocal(); schedulePush(); }
+const touchSettings = () => { S.settingsAt = Date.now(); };
 S = load();
 if (S.trackStart < PERIOD.start) S.trackStart = PERIOD.start;
-save();
+saveLocal();
 if (navigator.storage && navigator.storage.persist) { navigator.storage.persist().catch(() => {}); }
+
+/* ================= Đồng bộ (Firebase) ================= */
+const FIREBASE_CONFIG = null;
+const SDK = "https://www.gstatic.com/firebasejs/10.12.2/";
+const sync = { auth: null, db: null, user: null, ref: null, unsub: null, timer: null, lastRemote: null, state: "off", err: "", mode: "" };
+function mergeStates(a, b) {
+  const deleted = Object.assign({}, b.deleted, a.deleted);
+  const resetAt = Math.max(a.resetAt || 0, b.resetAt || 0);
+  const union = (x, y) => {
+    const m = new Map();
+    for (const e of [...(y || []), ...(x || [])]) if (e && e.id && !deleted[e.id]) m.set(e.id, e);
+    return [...m.values()].sort((p, q) => (p.id < q.id ? -1 : p.id > q.id ? 1 : 0));
+  };
+  const checkins = {};
+  for (const src of [b.checkins || {}, a.checkins || {}]) for (const [k, v] of Object.entries(src)) {
+    const ts = typeof v === "number" ? v : 1;
+    if (ts >= resetAt) checkins[k] = Math.max(checkins[k] || 0, ts);
+  }
+  let shop;
+  if ((a.resetAt || 0) === (b.resetAt || 0)) {
+    shop = Object.assign({}, b.shop);
+    for (const [k, v] of Object.entries(a.shop || {})) shop[k] = (v && typeof v === "object" && shop[k] && typeof shop[k] === "object") ? Object.assign({}, shop[k], v) : v;
+  } else shop = Object.assign({}, ((a.resetAt || 0) > (b.resetAt || 0) ? a : b).shop);
+  for (const k of Object.keys(shop)) if (k.endsWith(":eid") && deleted[shop[k]]) { delete shop[k]; delete shop[k.slice(0, -4) + ":logged"]; }
+  const s = (a.settingsAt || 0) >= (b.settingsAt || 0) ? a : b;
+  return normalize({
+    v: 1, total: s.total, cap: s.cap, cats: s.cats, settingsAt: s.settingsAt || 0,
+    trackStart: [a.trackStart, b.trackStart].filter(Boolean).sort()[0] || today(),
+    expenses: union(a.expenses, b.expenses), free: union(a.free, b.free),
+    checkins, shop, deleted, resetAt, seenMilestone: Math.max(a.seenMilestone || 0, b.seenMilestone || 0)
+  });
+}
+function loadScript(src) {
+  return new Promise((res, rej) => { const el = document.createElement("script"); el.src = src; el.onload = res; el.onerror = () => rej(new Error(src)); document.head.appendChild(el); });
+}
+function setSync(state, err) { sync.state = state; sync.err = err || ""; renderSync(); }
+async function initSync() {
+  if (!FIREBASE_CONFIG) { setSync("off"); return; }
+  setSync("loading");
+  try {
+    await loadScript(SDK + "firebase-app-compat.js");
+    await Promise.all([loadScript(SDK + "firebase-auth-compat.js"), loadScript(SDK + "firebase-firestore-compat.js")]);
+  } catch (e) { setSync("error", "Không tải được phần đồng bộ. Kiểm tra mạng rồi tải lại trang. Dữ liệu vẫn lưu trong máy."); return; }
+  firebase.initializeApp(FIREBASE_CONFIG);
+  sync.auth = firebase.auth(); sync.db = firebase.firestore();
+  sync.auth.onAuthStateChanged((u) => {
+    if (sync.unsub) { sync.unsub(); sync.unsub = null; }
+    sync.user = u; sync.ref = null; sync.lastRemote = null;
+    if (!u) { setSync("signedout"); return; }
+    setSync("busy");
+    sync.ref = sync.db.collection("users").doc(u.uid);
+    sync.unsub = sync.ref.onSnapshot(onRemote, (err) => setSync("error", err && err.code === "permission-denied" ? "Firebase chặn quyền đọc. Kiểm tra lại Rules của Firestore." : "Mất kết nối đồng bộ. Tải lại trang để thử lại."));
+  });
+}
+function onRemote(snap) {
+  if (snap.metadata.hasPendingWrites) return;
+  let remote = null;
+  if (snap.exists) { try { remote = normalize(JSON.parse(snap.data().json)); } catch (e) { remote = null; } }
+  sync.lastRemote = remote ? canon(remote) : "";
+  const merged = remote ? mergeStates(S, remote) : mergeStates(S, S);
+  const mc = canon(merged);
+  if (mc !== canon(S)) { S = merged; saveLocal(); renderAll(); }
+  if (mc !== sync.lastRemote) pushNow(); else setSync("ok");
+}
+function schedulePush() {
+  if (!sync.ref) return;
+  clearTimeout(sync.timer); setSync("busy");
+  sync.timer = setTimeout(pushNow, 700);
+}
+async function pushNow() {
+  if (!sync.ref) return;
+  clearTimeout(sync.timer);
+  const c = canon(mergeStates(S, S));
+  if (c === sync.lastRemote) { setSync("ok"); return; }
+  try {
+    await sync.ref.set({ json: c, at: firebase.firestore.FieldValue.serverTimestamp() });
+    sync.lastRemote = c; setSync("ok");
+  } catch (e) {
+    setSync("error", e && e.code === "permission-denied" ? "Firebase chặn quyền ghi. Kiểm tra lại Rules của Firestore." : "Chưa lưu được lên mạng. Dữ liệu vẫn nằm trong máy và sẽ đồng bộ khi có mạng.");
+  }
+}
+function authMsg(code) {
+  return ({
+    "auth/invalid-credential": "Sai email hoặc mật khẩu.", "auth/wrong-password": "Sai email hoặc mật khẩu.", "auth/user-not-found": "Chưa có tài khoản với email này. Bấm Tạo tài khoản.",
+    "auth/invalid-login-credentials": "Sai email hoặc mật khẩu.", "auth/email-already-in-use": "Email này đã có tài khoản. Bấm Đăng nhập.", "auth/invalid-email": "Email không hợp lệ.",
+    "auth/weak-password": "Mật khẩu cần ít nhất 6 ký tự.", "auth/network-request-failed": "Không có mạng. Thử lại khi có mạng.",
+    "auth/too-many-requests": "Thử sai quá nhiều lần. Đợi vài phút rồi thử lại.", "auth/operation-not-allowed": "Firebase chưa bật đăng nhập Email/Password."
+  })[code] || "Không đăng nhập được (" + (code || "lỗi lạ") + ").";
+}
+async function doAuth(kind) {
+  const email = $("#syEmail").value.trim(), pw = $("#syPw").value, out = $("#syMsg");
+  if (kind === "reset") {
+    if (!email) { out.textContent = "Nhập email trước, rồi bấm Quên mật khẩu."; return; }
+    try { await sync.auth.sendPasswordResetEmail(email); out.textContent = "Đã gửi email đặt lại mật khẩu."; } catch (e) { out.textContent = authMsg(e.code); }
+    return;
+  }
+  if (!email || pw.length < 6) { out.textContent = "Nhập email và mật khẩu (ít nhất 6 ký tự)."; return; }
+  out.textContent = kind === "up" ? "Đang tạo tài khoản…" : "Đang đăng nhập…";
+  try {
+    if (kind === "up") await sync.auth.createUserWithEmailAndPassword(email, pw);
+    else await sync.auth.signInWithEmailAndPassword(email, pw);
+    toast("Đã đăng nhập. Dữ liệu đang được đồng bộ.");
+  } catch (e) { out.textContent = authMsg(e.code); }
+}
+function renderSync(force) {
+  const chip = $("#syncChip"), box = $("#syncBox");
+  const st = sync.state;
+  if (chip) {
+    const map = { off: null, loading: ["busy", "Đang kết nối"], signedout: ["out", "Chưa đồng bộ"], busy: ["busy", "Đang lưu"], ok: ["ok", "Đã đồng bộ"], error: ["err", "Lỗi đồng bộ"] };
+    const m = map[st];
+    chip.hidden = !m;
+    if (m) { chip.className = "sync-chip " + m[0]; chip.textContent = m[1]; }
+  }
+  if (!box) return;
+  const mode = st === "off" ? "off" : st === "signedout" ? "form" : st === "loading" ? "loading" : "user";
+  if (mode === sync.mode && !force) {
+    const s2 = $("#syState"); if (s2) s2.textContent = syncLine(); return;
+  }
+  if (mode === "form" && sync.mode === "form" && box.contains(document.activeElement)) return;
+  sync.mode = mode;
+  if (mode === "off") box.innerHTML = `<h3>Đồng bộ giữa các máy</h3><p class="small muted" style="margin:0">Chưa bật. Dữ liệu hiện chỉ nằm trong trình duyệt của máy này.</p>`;
+  else if (mode === "loading") box.innerHTML = `<h3>Đồng bộ giữa các máy</h3><p class="small muted" style="margin:0">Đang kết nối…</p>`;
+  else if (mode === "form") box.innerHTML = `<h3>Đăng nhập để đồng bộ</h3>
+    <p class="small muted" style="margin:0">Dùng cùng một tài khoản trên điện thoại và laptop. Dữ liệu đang có trong máy này sẽ được gộp vào tài khoản, không bị ghi đè.</p>
+    <form id="syForm" autocomplete="on">
+      <label class="f wide">Email<input id="syEmail" type="email" autocomplete="username" inputmode="email" required></label>
+      <label class="f wide">Mật khẩu (ít nhất 6 ký tự)<input id="syPw" type="password" autocomplete="current-password" minlength="6" required></label>
+      <button class="btn primary" type="submit">Đăng nhập</button>
+      <button class="btn" type="button" data-auth="up">Tạo tài khoản</button>
+      <button class="btn quiet wide" type="button" data-auth="reset">Quên mật khẩu</button>
+    </form>
+    <p class="small" id="syMsg" role="status" style="margin:0"></p>`;
+  else box.innerHTML = `<h3>Đồng bộ giữa các máy</h3>
+    <p class="small" style="margin:0">Tài khoản: <b>${esc(sync.user ? sync.user.email : "")}</b></p>
+    <p class="small muted" id="syState" style="margin:0">${esc(syncLine())}</p>
+    <div class="actions"><button class="btn quiet" type="button" id="sySignOut">Đăng xuất</button></div>`;
+}
+function syncLine() {
+  return sync.state === "ok" ? "Đã lưu lên mạng. Mở trên máy khác và đăng nhập cùng tài khoản là thấy." : sync.state === "busy" ? "Đang lưu lên mạng…" : sync.state === "error" ? sync.err : "";
+}
+document.addEventListener("submit", (e) => { if (e.target.id === "syForm") { e.preventDefault(); doAuth("in"); } });
+document.addEventListener("click", (e) => {
+  const a = e.target.closest("[data-auth]"); if (a) { doAuth(a.dataset.auth); return; }
+  if (e.target.closest("#sySignOut")) { sync.auth.signOut(); toast("Đã đăng xuất. Dữ liệu vẫn nằm trong máy này."); return; }
+  if (e.target.closest("#syncChip")) { show("log"); setTimeout(() => { const b = $("#syncBox"); if (b) b.scrollIntoView({ block: "center" }); }, 50); }
+});
 
 /* ================= Tính toán ================= */
 const catById = () => Object.fromEntries(S.cats.map((c) => [c.id, c]));
@@ -738,7 +913,8 @@ function renderLog() {
     + `<div class="li"><div></div><div class="what muted small">${list.length} khoản</div><div class="money">${fmt(list.reduce((a, e) => a + e.amount, 0))}</div><div></div></div>`
     : `<div class="empty"><strong>Chưa có khoản chi nào</strong>Ghi khoản đầu tiên ở form phía trên.</div>`;
   $("#sTotal").value = S.total; $("#sCap").value = S.cap;
-  $("#storeInfo").textContent = storageOK ? `Đang lưu trong máy này · ${S.expenses.length} khoản chi, ${S.free.length} bữa free.` : "Trình duyệt đang chặn lưu dữ liệu (có thể do chế độ ẩn danh). Hãy mở bằng tab thường.";
+  $("#storeInfo").textContent = `${S.expenses.length} khoản chi, ${S.free.length} bữa free.` + (storageOK ? "" : " Trình duyệt này đang chặn lưu dữ liệu trong máy (có thể do tab ẩn danh).");
+  renderSync(true);
 }
 function renderChips() {
   const v = CHIPS[$("#eCat").value] || [];
@@ -847,8 +1023,8 @@ document.querySelector("nav.tabs").addEventListener("click", (e) => { const b = 
 document.addEventListener("click", (e) => {
   const go = e.target.closest("[data-go]"); if (go) { show(go.dataset.go); return; }
   const a = e.target.closest("[data-act]");
-  if (a && a.dataset.act === "nospend") { S.checkins[today()] = "nospend"; save(); toast("Đã ghi ngày không tiêu."); renderAll(); }
-  if (a && a.dataset.act === "nospend-y") { S.checkins[addDays(today(), -1)] = "nospend"; save(); toast("Đã ghi hôm qua không tiêu."); renderAll(); }
+  if (a && a.dataset.act === "nospend") { S.checkins[today()] = Date.now(); save(); toast("Đã ghi ngày không tiêu."); renderAll(); }
+  if (a && a.dataset.act === "nospend-y") { S.checkins[addDays(today(), -1)] = Date.now(); save(); toast("Đã ghi hôm qua không tiêu."); renderAll(); }
 });
 // Ghi chi
 $("#eDate").value = today(); $("#frDate").value = today();
@@ -868,16 +1044,16 @@ $("#fEntry").addEventListener("submit", (e) => {
 $("#log").addEventListener("click", (e) => {
   const b = e.target.closest("[data-del]"); if (!b) return;
   if (!b.dataset.armed) { b.dataset.armed = "1"; b.textContent = "Chắc chưa?"; b.classList.add("danger"); setTimeout(() => { if (b.isConnected) { delete b.dataset.armed; b.textContent = "Xóa"; b.classList.remove("danger"); } }, 3000); return; }
-  S.expenses = S.expenses.filter((x) => x.id !== b.dataset.del); save(); toast("Đã xóa khoản chi."); renderLog();
+  S.deleted[b.dataset.del] = Date.now(); S.expenses = S.expenses.filter((x) => x.id !== b.dataset.del); save(); toast("Đã xóa khoản chi."); renderLog();
 });
 $("#logFilter").addEventListener("change", renderLog);
 $("#cats").addEventListener("change", (e) => {
   const i = e.target.closest("input[data-cat]"); if (!i) return;
   const c = S.cats.find((x) => x.id === i.dataset.cat); if (!c) return;
-  c.budget = Math.max(0, r2(parseFloat(i.value) || 0)); save(); renderLog();
+  c.budget = Math.max(0, r2(parseFloat(i.value) || 0)); touchSettings(); save(); renderLog();
 });
-$("#sTotal").addEventListener("change", (e) => { S.total = Math.max(0, r2(parseFloat(e.target.value) || 0)); save(); renderLog(); });
-$("#sCap").addEventListener("change", (e) => { S.cap = Math.max(0, r2(parseFloat(e.target.value) || 0)); save(); renderLog(); toast("Đã đổi giới hạn ngoài plan."); });
+$("#sTotal").addEventListener("change", (e) => { S.total = Math.max(0, r2(parseFloat(e.target.value) || 0)); touchSettings(); save(); renderLog(); });
+$("#sCap").addEventListener("change", (e) => { S.cap = Math.max(0, r2(parseFloat(e.target.value) || 0)); touchSettings(); save(); renderLog(); toast("Đã đổi giới hạn ngoài plan."); });
 $("#bExport").addEventListener("click", () => {
   const blob = new Blob([JSON.stringify(S, null, 2)], { type: "application/json" });
   const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `giu-lua-sao-luu-${today()}.json`;
@@ -889,14 +1065,16 @@ $("#bImport").addEventListener("change", async (e) => {
   try {
     const o = JSON.parse(await f.text());
     if (!o || o.v !== 1 || !Array.isArray(o.expenses) || !Array.isArray(o.cats)) throw new Error("bad");
-    S = Object.assign(freshState(), o); save(); toast("Đã khôi phục dữ liệu."); renderAll();
+    S = normalize(o); touchSettings(); save(); toast("Đã khôi phục dữ liệu."); renderAll();
   } catch (err) { toast("File này không phải file sao lưu của trang."); }
   e.target.value = "";
 });
 $("#bReset").addEventListener("click", (e) => {
   const b = e.currentTarget;
   if (!b.dataset.armed) { b.dataset.armed = "1"; b.textContent = "Bấm lần nữa để xóa hết"; setTimeout(() => { delete b.dataset.armed; b.textContent = "Xóa toàn bộ dữ liệu"; }, 4000); return; }
-  S = freshState(); save(); delete b.dataset.armed; b.textContent = "Xóa toàn bộ dữ liệu"; toast("Đã xóa và bắt đầu lại."); renderAll();
+  const del = Object.assign({}, S.deleted), now = Date.now();
+  for (const x of [...S.expenses, ...S.free]) del[x.id] = now;
+  S = freshState(); S.deleted = del; S.resetAt = now; S.settingsAt = now; save(); delete b.dataset.armed; b.textContent = "Xóa toàn bộ dữ liệu"; toast("Đã xóa và bắt đầu lại."); renderAll();
 });
 // Nấu
 $("#ckPrev").addEventListener("click", () => { cookWeek = Math.max(0, cookWeek - 1); renderCook(); });
@@ -921,7 +1099,7 @@ $("#shopLists").addEventListener("click", (e) => {
     S.shop[key + ":logged"] = v; S.shop[key + ":eid"] = id; save(); toast(`Đã ghi ${fmt(v)} vào Đi chợ.`); renderShop();
   }
   if (e.target.closest("[data-unlog]")) {
-    const eid = S.shop[key + ":eid"]; S.expenses = S.expenses.filter((x) => x.id !== eid);
+    const eid = S.shop[key + ":eid"]; if (eid) S.deleted[eid] = Date.now(); S.expenses = S.expenses.filter((x) => x.id !== eid);
     delete S.shop[key + ":logged"]; delete S.shop[key + ":eid"]; save(); toast("Đã bỏ khoản đi chợ này, bạn ghi lại số đúng nhé."); renderShop();
   }
 });
@@ -937,7 +1115,7 @@ $("#fFree").addEventListener("submit", (e) => {
 $("#freeLog").addEventListener("click", (e) => {
   const b = e.target.closest("[data-delfree]"); if (!b) return;
   if (!b.dataset.armed) { b.dataset.armed = "1"; b.textContent = "Chắc chưa?"; setTimeout(() => { if (b.isConnected) { delete b.dataset.armed; b.textContent = "Xóa"; } }, 3000); return; }
-  S.free = S.free.filter((x) => x.id !== b.dataset.delfree); save(); renderFree();
+  S.deleted[b.dataset.delfree] = Date.now(); S.free = S.free.filter((x) => x.id !== b.dataset.delfree); save(); renderFree();
 });
 $("#celebrate").addEventListener("click", (e) => { if (e.target.id === "celebrate") $("#celebrate").hidden = true; });
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") $("#celebrate").hidden = true; });
@@ -946,6 +1124,7 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden) { S 
 window.addEventListener("storage", (e) => { if (e.key === KEY) { S = load(); renderAll(); } });
 
 show(location.hash.slice(1) || "home", false);
+initSync();
 })();
 </script>
 </body>
